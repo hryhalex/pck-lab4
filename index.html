@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Иллюстрация растровых алгоритмов</title>
+<title>Иллюстрация растровых алгоритмов + OpenCV</title>
+<script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
 <style>
   body {
     margin: 0;
@@ -49,6 +50,11 @@
     background-color: #d050a5;
     transform: scale(1.05);
   }
+  button:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+    transform: none;
+  }
   canvas {
     background-color: #FFF;
     margin-top: 20px;
@@ -80,27 +86,34 @@
     max-width: 700px;
     color: #4B2E05;
   }
+  #status {
+    color: #C71585;
+    font-weight: bold;
+    margin-bottom: 10px;
+  }
 </style>
 </head>
 <body>
 
-<h1>Иллюстрация растровых алгоритмов</h1>
+<h1>Иллюстрация растровых алгоритмов (OpenCV)</h1>
+
+<div id="status">Загрузка OpenCV...</div>
 
 <div class="controls">
   <label>Алгоритм:</label>
   <select id="algorithm">
-    <option value="step">Пошаговый</option>
-    <option value="dda">ЦДА</option>
-    <option value="bresenham">Брезенхем (отрезок)</option>
-    <option value="circle">Брезенхем (окружность)</option>
-    <option value="bezier">Кастла–Питвея</option>
-    <option value="wu">Сглаженная линия (Ву)</option>
+    <option value="step">Пошаговый (OpenCV Line)</option>
+    <option value="dda">ЦДА (OpenCV Line)</option>
+    <option value="bresenham">Брезенхем (OpenCV Line)</option>
+    <option value="circle">Брезенхем (OpenCV Circle)</option>
+    <option value="bezier">Кастла–Питвея (JS Math)</option>
+    <option value="wu">Сглаженная линия (OpenCV AA)</option>
   </select>
   <label>X₁: <input type="number" id="x1" value="-10"></label>
   <label>Y₁: <input type="number" id="y1" value="-5"></label>
   <label>X₂: <input type="number" id="x2" value="10"></label>
   <label>Y₂: <input type="number" id="y2" value="8"></label>
-  <button onclick="draw()">Построить</button>
+  <button id="btnDraw" onclick="draw()" disabled>Построить</button>
   <button onclick="clearCanvas()">Очистить</button>
 </div>
 
@@ -112,8 +125,7 @@
 
 <div class="note">
 <b>Примечание:</b>  
-Каждая целочисленная координата (x, y) отображается в центре клетки сетки.  
-Один шаг по сетке соответствует одной единице координатного пространства (масштаб 1:1).
+Используется библиотека <b>OpenCV.js</b> для растеризации примитивов на виртуальной сетке, после чего результат переносится на холст.
 </div>
 
 <script>
@@ -122,6 +134,19 @@ const ctx = canvas.getContext("2d");
 const size = 20;
 const midX = Math.floor(canvas.width / 2);
 const midY = Math.floor(canvas.height / 2);
+
+const gridW = canvas.width / size; 
+const gridH = canvas.height / size;
+const offset = gridW / 2; 
+
+let cvReady = false;
+
+function onOpenCvReady() {
+  cvReady = true;
+  document.getElementById("status").innerText = "OpenCV готов к работе";
+  document.getElementById("status").style.color = "green";
+  document.getElementById("btnDraw").disabled = false;
+}
 
 function gridToCanvas(x, y) {
   return { cx: midX + x * size, cy: midY - y * size };
@@ -154,7 +179,6 @@ function drawGrid() {
   ctx.lineTo(midX, canvas.height);
   ctx.stroke();
 
-  // Добавляем цифры на оси
   ctx.fillStyle = "#C71585";
   ctx.font = "12px Segoe UI";
   ctx.textAlign = "center";
@@ -182,53 +206,69 @@ function clearCanvas() {
   drawGrid();
 }
 
-function stepByStep(x1, y1, x2, y2) {
-  const dx = x2 - x1, dy = y2 - y1;
-  const steps = Math.max(Math.abs(dx), Math.abs(dy));
-  const xinc = dx / steps, yinc = dy / steps;
-  let x = x1, y = y1;
-  const points = [];
-  for (let i = 0; i <= steps; i++) {
-    points.push([Math.round(x), Math.round(y)]);
-    x += xinc; y += yinc;
-  }
-  return points;
+function runOpenCV(drawCallback) {
+    if (!cvReady) return [];
+
+    let rows = gridH + 1; 
+    let cols = gridW + 1;
+    let mat = new cv.Mat.zeros(rows, cols, cv.CV_8UC1);
+
+    drawCallback(mat);
+
+    const points = [];
+    let data = mat.data; 
+
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            let intensity = data[r * cols + c];
+            if (intensity > 0) {
+                let x = c - Math.floor(cols/2);
+                let y = Math.floor(rows/2) - r;
+             
+                if (intensity < 255) {
+                    let alpha = intensity / 255;
+                    points.push([x, y, `rgba(199,21,133,${alpha.toFixed(2)})`]);
+                } else {
+                    points.push([x, y]);
+                }
+            }
+        }
+    }
+    
+    mat.delete(); 
+    return points;
 }
 
-function dda(x1, y1, x2, y2) { return stepByStep(x1, y1, x2, y2); }
-
-function bresenhamLine(x1, y1, x2, y2) {
-  let dx = Math.abs(x2 - x1), dy = Math.abs(y2 - y1);
-  let sx = x1 < x2 ? 1 : -1, sy = y1 < y2 ? 1 : -1;
-  let err = dx - dy;
-  const points = [];
-  while (true) {
-    points.push([x1, y1]);
-    if (x1 === x2 && y1 === y2) break;
-    let e2 = 2 * err;
-    if (e2 > -dy) { err -= dy; x1 += sx; }
-    if (e2 < dx) { err += dx; y1 += sy; }
-  }
-  return points;
+function toCvPt(x, y) {
+    const cx = Math.floor(gridW/2);
+    const cy = Math.floor(gridH/2);
+    return new cv.Point(x + cx, cy - y);
 }
 
-function bresenhamCircle(x0, y0, r) {
-  let x = 0, y = r, d = 3 - 2 * r;
-  const points = [];
-  while (y >= x) {
-    points.push([x0 + x, y0 + y]);
-    points.push([x0 - x, y0 + y]);
-    points.push([x0 + x, y0 - y]);
-    points.push([x0 - x, y0 - y]);
-    points.push([x0 + y, y0 + x]);
-    points.push([x0 - y, y0 + x]);
-    points.push([x0 + y, y0 - x]);
-    points.push([x0 - y, y0 - x]);
-    x++;
-    if (d > 0) { y--; d = d + 4 * (x - y) + 10; }
-    else d = d + 4 * x + 6;
-  }
-  return points;
+function cvLine(x1, y1, x2, y2) {
+    return runOpenCV((mat) => {
+        let p1 = toCvPt(x1, y1);
+        let p2 = toCvPt(x2, y2);
+        let color = new cv.Scalar(255);
+        cv.line(mat, p1, p2, color, 1, cv.LINE_8);
+    });
+}
+
+function cvWuLine(x1, y1, x2, y2) {
+    return runOpenCV((mat) => {
+        let p1 = toCvPt(x1, y1);
+        let p2 = toCvPt(x2, y2);
+        let color = new cv.Scalar(255);
+        cv.line(mat, p1, p2, color, 1, cv.LINE_AA);
+    });
+}
+
+function cvCircle(x0, y0, r) {
+    return runOpenCV((mat) => {
+        let center = toCvPt(x0, y0);
+        let color = new cv.Scalar(255);
+        cv.circle(mat, center, r, color, 1, cv.LINE_8);
+    });
 }
 
 function bezierCurve(x1, y1, x2, y2) {
@@ -243,31 +283,6 @@ function bezierCurve(x1, y1, x2, y2) {
   return points;
 }
 
-function wuLine(x1, y1, x2, y2) {
-  const points = [];
-  const steep = Math.abs(y2 - y1) > Math.abs(x2 - x1);
-  if (steep) { [x1, y1] = [y1, x1]; [x2, y2] = [y2, x2]; }
-  if (x1 > x2) { [x1, x2] = [x2, x1]; [y1, y2] = [y2, y1]; }
-  const dx = x2 - x1, dy = y2 - y1;
-  const gradient = dx === 0 ? 1 : dy / dx;
-  let y = y1;
-  for (let x = x1; x <= x2; x++) {
-    const yFloor = Math.floor(y);
-    const alpha = y - yFloor;
-    const c1 = `rgba(199,21,133,${1 - alpha})`;
-    const c2 = `rgba(199,21,133,${alpha})`;
-    if (steep) {
-      points.push([yFloor, x, c1]);
-      points.push([yFloor + 1, x, c2]);
-    } else {
-      points.push([x, yFloor, c1]);
-      points.push([x, yFloor + 1, c2]);
-    }
-    y += gradient;
-  }
-  return points;
-}
-
 async function animatePoints(points) {
   for (let i = 0; i < points.length; i++) {
     const [x, y, color] = points[i];
@@ -277,6 +292,11 @@ async function animatePoints(points) {
 }
 
 async function draw() {
+  if (!cvReady) {
+      alert("OpenCV еще загружается, подождите...");
+      return;
+  }
+
   clearCanvas();
   const algo = document.getElementById("algorithm").value;
   const x1 = parseFloat(document.getElementById("x1").value);
@@ -284,45 +304,49 @@ async function draw() {
   const x2 = parseFloat(document.getElementById("x2").value);
   const y2 = parseFloat(document.getElementById("y2").value);
 
-  const runs = 30;
+  const runs = 10; 
   const t0 = performance.now();
+  
+  let points = [];
+  
   for (let i = 0; i < runs; i++) {
-    if (algo === "step") stepByStep(x1, y1, x2, y2);
-    else if (algo === "dda") dda(x1, y1, x2, y2);
-    else if (algo === "bresenham") bresenhamLine(x1, y1, x2, y2);
-    else if (algo === "circle") bresenhamCircle(x1, y1, 8);
-    else if (algo === "bezier") bezierCurve(x1, y1, x2, y2);
-    else if (algo === "wu") wuLine(x1, y1, x2, y2);
+    if (algo === "step" || algo === "dda" || algo === "bresenham") {
+        points = cvLine(x1, y1, x2, y2);
+    }
+    else if (algo === "circle") points = cvCircle(x1, y1, 8); 
+    else if (algo === "bezier") points = bezierCurve(x1, y1, x2, y2);
+    else if (algo === "wu") points = cvWuLine(x1, y1, x2, y2);
   }
+  
   const t1 = performance.now();
   const avg = (t1 - t0) / runs;
   clearCanvas();
 
-  let points = [];
-  if (algo === "step") points = stepByStep(x1, y1, x2, y2);
-  else if (algo === "dda") points = dda(x1, y1, x2, y2);
-  else if (algo === "bresenham") points = bresenhamLine(x1, y1, x2, y2);
-  else if (algo === "circle") points = bresenhamCircle(x1, y1, 8);
-  else if (algo === "bezier") points = bezierCurve(x1, y1, x2, y2);
-  else if (algo === "wu") points = wuLine(x1, y1, x2, y2);
+  if (points.length > 0 && algo !== 'circle') {
+      points.sort((a, b) => {
+         let distA = (a[0]-x1)**2 + (a[1]-y1)**2;
+         let distB = (b[0]-x1)**2 + (b[1]-y1)**2;
+         return distA - distB;
+      });
+  }
 
   animatePoints(points);
   document.getElementById("time").innerText = 
-    `Среднее время выполнения: ${avg.toFixed(5)} мс (из ${runs} повторов)`;
+    `Среднее время выполнения (OpenCV): ${avg.toFixed(5)} мс`;
   updateDescription(algo);
 }
 
 function updateDescription(algo) {
   const desc = document.getElementById("desc");
   const texts = {
-    step: "<h2>Пошаговый алгоритм</h2>Простейший способ растеризации.",
-    dda: "<h2>ЦДА (Digital Differential Analyzer)</h2>Использует равномерное приращение координат.",
-    bresenham: "<h2>Брезенхем (отрезок)</h2>Целочисленный, быстрый и точный метод.",
-    circle: "<h2>Брезенхем (окружность)</h2>Использует симметрию и целочисленные вычисления.",
-    bezier: "<h2>Кастла–Питвея (Bézier)</h2>Построение плавных кривых Безье.",
-    wu: "<h2>Сглаженные линии (Ву)</h2>Устраняет эффект ступенчатости линий."
+    step: "<h2>Пошаговый / ЦДА / Брезенхем (OpenCV)</h2>Все эти алгоритмы заменены на <code>cv.line()</code> с типом LINE_8. OpenCV использует оптимизированный алгоритм Брезенхема внутри.",
+    dda: "<h2>ЦДА (через OpenCV)</h2>Реализовано через <code>cv.line()</code>.",
+    bresenham: "<h2>Брезенхем (через OpenCV)</h2>Используется стандартный <code>cv.line()</code>. Самый быстрый способ отрисовки линий.",
+    circle: "<h2>Окружность (OpenCV)</h2>Используется <code>cv.circle()</code>. Генерирует 8-связную окружность на матрице.",
+    bezier: "<h2>Кастла–Питвея (Безье)</h2>Оставлена нативная JS реализация, так как OpenCV использует полилинии для кривых.",
+    wu: "<h2>Сглаженная линия (OpenCV AA)</h2>Используется <code>cv.line()</code> с флагом <code>cv.LINE_AA</code> (Gaussian filtering). Пиксели получают прозрачность."
   };
-  desc.innerHTML = texts[algo];
+  desc.innerHTML = texts[algo] || texts['step'];
 }
 
 drawGrid();
